@@ -13,27 +13,53 @@ var utils = {
 	},
 	action: function(name, index){
 		state.action = name || state.action;
-		actions[state.action][index || 0](state.name);
-		sessions.load();
+                actions[state.action][index || 0](state.name);
+                sessions.load();
+                syncChromeStorage();
 	},
 	escape: function(text){
 		return $("<div/>").text(text).html();
 	},
-	tabs: function(cb){
-		chrome.tabs.getAllInWindow(null, function(tabs){
-			if (localStorage.pinned === "skip") {
-				tabs = tabs.filter(function(t){ return !t.pinned; });
-			}
+        tabs: function(cb){
+                chrome.tabs.query({ currentWindow: true }, function(tabs){
+                        if (localStorage.pinned === "skip") {
+                                tabs = tabs.filter(function(t){ return !t.pinned; });
+                        }
 			
-			cb(tabs.map(function(t){ return t.url; }));
-			sessions.load();
+                        cb(tabs.map(function(t){ return t.url; }));
+                        sessions.load();
+                        syncChromeStorage();
 		});
 	}
 };
 
 
 /*** data ***/
-var background = chrome.extension.getBackgroundPage();
+function syncChromeStorage() {
+    const data = {
+        sessions: localStorage.sessions || '{}',
+        pinned: localStorage.pinned || 'skip',
+        open: localStorage.open,
+        readchanges: localStorage.readchanges,
+        noreplacingpinned: localStorage.noreplacingpinned,
+        version: chrome.runtime.getManifest().version
+    };
+    if (localStorage.temp) {
+        data.temp = localStorage.temp;
+    } else {
+        chrome.storage.local.remove('temp');
+    }
+    chrome.storage.local.set(data);
+}
+
+localStorage.sessions = localStorage.sessions || '{}';
+localStorage.pinned = localStorage.pinned || 'skip';
+localStorage.open = localStorage.open || JSON.stringify({
+        add: 'click',
+        replace: 'shift+click',
+        new: 'ctrl/cmd+click',
+        incognito: 'alt+click'
+});
 
 var state = {
 	name: "",
@@ -66,8 +92,10 @@ var sessions = {
 		
 		$("hr", "#main-saved").last().remove();
 		
-		$list.children().css("margin-right", Object.keys(sessions.list).length > 10 ? 5 : 0);
-	},
+                $list.children().css("margin-right", Object.keys(sessions.list).length > 10 ? 5 : 0);
+
+                syncChromeStorage();
+        },
 	display: function(name, count){
 		var prefix = "", session = name === null ? (name = "temp session", !count && (prefix = "the "), sessions.temp) : sessions.list[name];
 		return prefix + '<a title="' + session.join("\n") + '">' + (count ? session.length + " tabs" : utils.escape(name)) + '</a>';
@@ -111,7 +139,6 @@ var actions = {
 			next();
 		});
 		
-		background.ga("send", "event", "Action", "Import", state.entered);
 	}],
 	
 	export: [function(){
@@ -119,9 +146,7 @@ var actions = {
 		
 		$("#export-link").prop("href", (window.URL || window.webkitURL).createObjectURL(data));
 	}, function(){
-		$("#export-check").fadeIn().delay(2000).fadeOut();
-		
-		background.ga("send", "event", "Action", "Export");
+                $("#export-check").fadeIn().delay(2000).fadeOut();
 	}],
 	
 	rename: [function(name){
@@ -140,44 +165,40 @@ var actions = {
 			}
 		}
 	}, function(oname){
-		sessions.list[state.entered] = sessions.list[oname];
-		
-		if (state.entered !== oname) {
-			delete sessions.list[oname];
-		}
-		
-		background.ga("send", "event", "Session", "Rename");
+                sessions.list[state.entered] = sessions.list[oname];
+
+                if (state.entered !== oname) {
+                        delete sessions.list[oname];
+                }
 	}],
 	
 	add: [function(name){
 		utils.confirm("Are you sure you want to add the current window's tabs to " + sessions.display(name) + "?");
 	}, function(name){
-		utils.tabs(function(tabs){
-			Array.prototype.push.apply(name === null ? sessions.temp : sessions.list[name], tabs);
-		});
-		
-		background.ga("send", "event", name === null ? "Temp": "Session", "AddWin");
+                utils.tabs(function(tabs){
+                        Array.prototype.push.apply(name === null ? sessions.temp : sessions.list[name], tabs);
+                });
 	}],
 	
-	tab: [function(name){
-		utils.confirm("Are you sure you want to add the current tab to " + sessions.display(name) + "?");
-	}, function(name){
-		chrome.tabs.getSelected(null, function(tab){
-			(name === null ? sessions.temp : sessions.list[name]).push(tab.url);
-			sessions.load();
-		});
-		
-		background.ga("send", "event", name === null ? "Temp": "Session", "AddTab");
-	}],
+        tab: [function(name){
+                utils.confirm("Are you sure you want to add the current tab to " + sessions.display(name) + "?");
+        }, function(name){
+                chrome.tabs.query({active: true, currentWindow: true}, function(tabs){
+                        if (tabs && tabs.length) {
+                                var tab = tabs[0];
+                                (name === null ? sessions.temp : sessions.list[name]).push(tab.url);
+                                sessions.load();
+                                syncChromeStorage();
+                        }
+                });
+        }],
 	
 	replace: [function(name){
 		utils.confirm("Are you sure you want to replace " + sessions.display(name) + " with the current window's tabs?");
 	}, function(name){
-		background.ga("send", "event", "Session", sessions.list[name] ? "Replace" : "Save");
-		
-		utils.tabs(function(tabs){
-			sessions.list[name] = tabs;
-		});
+                utils.tabs(function(tabs){
+                        sessions.list[name] = tabs;
+                });
 	}, function(name){
 		utils.confirm("Are you sure you want to replace " + sessions.display(name) + " with the session being saved?");
 	}],
@@ -185,32 +206,28 @@ var actions = {
 	remove: [function(name){
 		utils.confirm("Are you sure you want to remove " + sessions.display(name) + "?");
 	}, function(name){
-		if (name === null) {
-			delete sessions.temp;
-		} else {
-			delete sessions.list[name];
-		}
-		
-		background.ga("send", "event", name === null ? "Temp" : "Session", "Remove");
+                if (name === null) {
+                        delete sessions.temp;
+                } else {
+                        delete sessions.list[name];
+                }
 	}],
 	
 	savetemp: [function(){
-		utils.tabs(function(tabs){
-			sessions.temp = tabs;
-		});
-		
-		background.ga("send", "event", "Temp", "Save");
-	}],
-	
-	save: [function(){
-		var $name = $("#main-save-name"), name = state.name = $name.val().trim();
-		
-		if (name) {
-			$name.val("");
+                utils.tabs(function(tabs){
+                        sessions.temp = tabs;
+                });
+        }],
+
+        save: [function(){
+                var $name = $("#main-save-name"), name = state.name = $name.val().trim();
+
+                if (name) {
+                        $name.val("");
 			
 			utils.action("replace", sessions.list[name] ? 2 : 1);
 		}
-	}]
+        }]
 };
 
 
@@ -229,35 +246,51 @@ $("body").on("focus", "*", function(){
 });
 
 $("#main-saved-list").on("click", "big, div > a:not([title])", function(){
-	state.name = this.parentNode.dataset.name;
-	
-	utils.action(this.tagName === "BIG" ? "rename" : "remove");
+        state.name = this.parentNode.dataset.name;
+
+        utils.action(this.tagName === "BIG" ? "rename" : "remove");
 }).on("click", "span > a", function(e){
-	var action = this.textContent.toLowerCase(),
-		name = state.name = this.parentNode.parentNode.dataset.name;
-	
-	if (action === "open") {
-		chrome.windows.getCurrent(function(win){
-			background.openSession(win.id, sessions.list[name], e, false) !== false && window.close();
-		});
-	} else {
-		utils.action(action);
-	}
+        var action = this.textContent.toLowerCase(),
+                name = state.name = this.parentNode.parentNode.dataset.name;
+
+        if (action === "open") {
+                chrome.windows.getCurrent(function(win){
+                        chrome.runtime.sendMessage({
+                                type: 'openSession',
+                                cwinId: win.id,
+                                urls: sessions.list[name],
+                                event: {ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey},
+                                isTemp: false
+                        }, function(res){
+                                res !== false && window.close();
+                        });
+                });
+        } else {
+                utils.action(action);
+        }
 });
 
 $("#main-saved-temp").on("click", "a:not([title])", function(e){
-	var action = this.textContent.toLowerCase();
-	state.name = null;
-	
-	if (action === "open") {
-		chrome.windows.getCurrent(function(win){
-			background.openSession(win.id, sessions.temp, e, true) !== false && window.close();
-		});
-	} else if (action.length === 1) {
-		utils.action("remove");
-	} else {
-		utils.action(action);
-	}
+        var action = this.textContent.toLowerCase();
+        state.name = null;
+
+        if (action === "open") {
+                chrome.windows.getCurrent(function(win){
+                        chrome.runtime.sendMessage({
+                                type: 'openSession',
+                                cwinId: win.id,
+                                urls: sessions.temp,
+                                event: {ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey},
+                                isTemp: true
+                        }, function(res){
+                                res !== false && window.close();
+                        });
+                });
+        } else if (action.length === 1) {
+                utils.action("remove");
+        } else {
+                utils.action(action);
+        }
 });
 
 $("#import-file").change(function(){
@@ -267,6 +300,7 @@ $("#import-file").change(function(){
 
 /*** init ***/
 sessions.load();
+syncChromeStorage();
 
 if (localStorage.readchanges !== "true") {
 	$("#main-changelog").show();
@@ -281,11 +315,8 @@ if (location.search) {
 		return false;
 	});
 	
-	utils.view("import");
-	
-	background.ga("send", "pageview", "/import");
+        utils.view("import");
 } else {
-	background.ga("send", "pageview", "/popup");
 }
 
 })();
